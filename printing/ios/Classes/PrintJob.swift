@@ -258,27 +258,71 @@ public class PrintJob: UIPrintPageRenderer, UIPrintInteractionControllerDelegate
 
         do {
             try data.write(to: fileURL, options: .atomic)
+            print("PDF file saved to: \(fileURL.path)")
         } catch {
-            print("sharePdf error: \(error.localizedDescription)")
+            print("sharePdf error writing file: \(error.localizedDescription)")
             return
         }
 
         let activityViewController = UIActivityViewController(activityItems: [fileURL, body as Any], applicationActivities: nil)
         activityViewController.setValue(subject, forKey: "subject")
+        
+        // Find the topmost view controller for presentation
+        var topViewController: UIViewController?
+        
+        if #available(iOS 13.0, *) {
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = windowScene.windows.first else {
+                print("sharePdf error: No window scene found")
+                return
+            }
+            topViewController = window.rootViewController
+        } else {
+            topViewController = UIApplication.shared.keyWindow?.rootViewController
+        }
+        
+        // Find the topmost presented view controller
+        while let presented = topViewController?.presentedViewController {
+            topViewController = presented
+        }
+        
+        guard let presenter = topViewController else {
+            print("sharePdf error: No view controller found to present from")
+            return
+        }
+        
         if UIDevice.current.userInterfaceIdiom == .pad {
-            let controller: UIViewController? = UIApplication.shared.keyWindow?.rootViewController
-            activityViewController.popoverPresentationController?.sourceView = controller?.view
+            activityViewController.popoverPresentationController?.sourceView = presenter.view
             activityViewController.popoverPresentationController?.sourceRect = rect
         }
-        UIApplication.shared.keyWindow?.rootViewController?.present(activityViewController, animated: true)
+        
+        print("Presenting share dialog from: \(type(of: presenter))")
+        presenter.present(activityViewController, animated: true) {
+            print("Share dialog presented successfully")
+        }
     }
 
     func convertHtml(_ data: String, withPageSize rect: CGRect, andMargin margin: CGRect, andBaseUrl baseUrl: URL?) {
-        let viewController = UIApplication.shared.delegate?.window?!.rootViewController
-        let wkWebView = WKWebView(frame: viewController!.view.bounds)
+        var viewController: UIViewController?
+        if #available(iOS 13.0, *) {
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = windowScene.windows.first else {
+                printing.onHtmlRendered(printJob: self, pdfData: Data())
+                return
+            }
+            viewController = window.rootViewController
+        } else {
+            viewController = UIApplication.shared.keyWindow?.rootViewController
+        }
+        
+        guard let controller = viewController else {
+            printing.onHtmlRendered(printJob: self, pdfData: Data())
+            return
+        }
+        let wkWebView = WKWebView(frame: controller.view.bounds)
         wkWebView.isHidden = true
         wkWebView.tag = 100
-        viewController?.view.addSubview(wkWebView)
+        controller.view.addSubview(wkWebView)
         wkWebView.loadHTMLString(data, baseURL: baseUrl ?? Bundle.main.bundleURL)
 
         urlObservation = wkWebView.observe(\.isLoading, changeHandler: { _, _ in
@@ -303,7 +347,7 @@ public class PrintJob: UIPrintPageRenderer, UIPrintInteractionControllerDelegate
 
                 UIGraphicsEndPDFContext()
 
-                if let viewWithTag = viewController?.view.viewWithTag(wkWebView.tag) {
+                if let viewWithTag = controller.view.viewWithTag(wkWebView.tag) {
                     viewWithTag.removeFromSuperview() // remove hidden webview when pdf is generated
 
                     // clear WKWebView cache
@@ -353,11 +397,24 @@ public class PrintJob: UIPrintPageRenderer, UIPrintInteractionControllerDelegate
         }
 
         if UIDevice.current.userInterfaceIdiom == .pad {
-            let viewController: UIViewController? = UIApplication.shared.keyWindow?.rootViewController
-            if viewController != nil {
-                controller.present(from: rect, in: viewController!.view, animated: true, completionHandler: pickPrinterCompletionHandler)
+            var rootViewController: UIViewController?
+            if #available(iOS 13.0, *) {
+                guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                      let window = windowScene.windows.first else {
+                    result(nil)
+                    return
+                }
+                rootViewController = window.rootViewController
+            } else {
+                rootViewController = UIApplication.shared.keyWindow?.rootViewController
+            }
+            
+            guard let presenter = rootViewController else {
+                result(nil)
                 return
             }
+            controller.present(from: rect, in: presenter.view, animated: true, completionHandler: pickPrinterCompletionHandler)
+            return
         }
 
         controller.present(animated: true, completionHandler: pickPrinterCompletionHandler)
